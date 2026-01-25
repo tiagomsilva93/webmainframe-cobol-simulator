@@ -1,0 +1,5 @@
+{
+  "name": "WebMainframe COBOL Simulator",
+  "description": "A web-based COBOL interpreter and mainframe simulator (ISPF/3270 style) featuring a modular Lexer, Parser, and Runtime for educational and compilation simulation purposes.",
+  "requestFramePermissions": []
+}
