@@ -11,6 +11,7 @@ import { Runtime } from './compiler/runtime';
 import { Validator, ValidationError } from './compiler/validator';
 import { Preprocessor, PreprocessorResult } from './compiler/preprocessor';
 import { SAMPLE_CODE } from './constants';
+import { ASTNode } from './compiler/types';
 
 interface InputRequest {
   variableName: string;
@@ -30,6 +31,7 @@ const App: React.FC = () => {
   const [errors, setErrors] = useState<string[]>([]); 
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]); 
   const [status, setStatus] = useState("READY");
+  const [ast, setAst] = useState<ASTNode | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Runtime Input Modal State
@@ -69,7 +71,6 @@ const App: React.FC = () => {
     setMissingCopy(null);
 
     // Resume Compilation immediately
-    // We pass the Updated Library specifically because setState is async
     runCompilationProcess(newLib); 
   };
 
@@ -88,9 +89,6 @@ const App: React.FC = () => {
   // --- Main Compilation Process ---
 
   const runCode = () => {
-    // Start fresh
-    setCopybookLibrary(new Map()); // Optional: Clear cache on fresh run? ISPF usually keeps it, but let's clear for simulation purity or keep it? 
-    // Let's clear it to ensure the user can re-upload if they fixed a file on disk.
     runCompilationProcess(new Map());
   };
 
@@ -98,7 +96,8 @@ const App: React.FC = () => {
     setStatus("PRE-PROCESSING...");
     setErrors([]);
     setValidationErrors([]);
-    setLogs([]);
+    setLogs([]); 
+    // Do not clear AST immediately to prevent flashing, update it on successful parse
 
     // 1. Preprocessor (Expand COPY statements)
     try {
@@ -117,47 +116,97 @@ const App: React.FC = () => {
         if (prepResult.error) {
             setErrors([prepResult.error]);
             setStatus("PRE-PROCESS ERROR");
-            return;
+            return; // ABORT
         }
 
         const expandedSource = prepResult.expandedSource;
 
         // 2. Validator
         const valErrors = Validator.validate(expandedSource);
-        if (valErrors.length > 0) {
-            setValidationErrors(valErrors); 
-            const formattedErrors = valErrors.map(e => 
+        
+        // Split errors based on severity
+        const severeErrors = valErrors.filter(e => e.severity === 'ERROR');
+        const nonSevereErrors = valErrors.filter(e => e.severity === 'WARNING' || e.severity === 'INFO');
+
+        // Always show validations in Editor
+        setValidationErrors(valErrors);
+
+        // Populate initial non-severe messages to Sysout
+        if (nonSevereErrors.length > 0) {
+             const formattedMsgs = nonSevereErrors.map(e => 
                 `${e.code} ${e.message}\nLINE ${e.line}, COLUMN ${e.column}.`
-            );
-            setErrors(formattedErrors);
-            setStatus("COMPILATION ERROR");
-            return;
+             );
+             setErrors(formattedMsgs);
         }
 
-        // 3. Lexer
-        const lexer = new Lexer(expandedSource);
-        const tokens = lexer.tokenize();
-        
-        // 4. Parser
-        const parser = new Parser(tokens);
-        const ast = parser.parse();
+        // Check blocking errors
+        if (severeErrors.length > 0) {
+            const formattedErrors = severeErrors.map(e => 
+                `${e.code} ${e.message}\nLINE ${e.line}, COLUMN ${e.column}.`
+            );
+            // Prepend severe errors to any existing warnings
+            setErrors(prev => [...formattedErrors, ...prev]);
+            setStatus("COMPILATION ERROR");
+            return; // STRICT BLOCK
+        }
 
-        setStatus("EXECUTING...");
+        // 3. Lexer & Parser (Wrapped in try/catch for fatal syntax errors)
+        try {
+            const lexer = new Lexer(expandedSource);
+            const tokens = lexer.tokenize();
+            
+            const parser = new Parser(tokens);
+            const parsedProgram = parser.parse();
+            
+            // Success! Update AST
+            setAst(parsedProgram.debugAST);
 
-        // 5. Runtime
-        const runtime = new Runtime(handleRuntimeInput);
-        
-        setTimeout(async () => {
-            const result = await runtime.run(ast);
-            setLogs(result.output);
-            setErrors(result.errors);
-            setStatus(result.errors.length > 0 ? "JOB FAILED" : "JOB ENDED");
-        }, 100);
+            setStatus("EXECUTING...");
+
+            // 5. Runtime (Only reached if no severe errors occurred)
+            const runtime = new Runtime(handleRuntimeInput);
+            
+            setTimeout(async () => {
+                const result = await runtime.run(parsedProgram);
+                setLogs(result.output);
+                
+                // Append runtime errors (if any)
+                if (result.errors.length > 0) {
+                    setErrors(prev => [...prev, ...result.errors]);
+                }
+                
+                // If we had compilation warnings but runtime succeeded, status is OK (but MAXCC=4 in Sysout)
+                // If runtime failed, JOB FAILED
+                setStatus(result.errors.length > 0 ? "JOB FAILED" : "JOB ENDED");
+            }, 100);
+
+        } catch (e: any) {
+            // Lexer or Parser Fatal Error
+            console.error(e);
+            const msg = e.message || "Unknown Compilation Error";
+            
+            // Try to extract line/col from error message to show in Editor
+            const match = msg.match(/Line (\d+), Column (\d+)/);
+            if (match) {
+                const line = parseInt(match[1], 10);
+                const col = parseInt(match[2], 10);
+                setValidationErrors(prev => [...prev, {
+                    line,
+                    column: col,
+                    code: 'IGYPS2120-S',
+                    message: msg,
+                    severity: 'ERROR' // Parser errors are fatal
+                }]);
+            }
+
+            setErrors(prev => [msg, ...prev]);
+            setStatus("COMPILATION ERROR");
+        }
 
     } catch (e: any) {
         console.error(e);
-        setErrors([e.message || "Unknown Compilation Error"]);
-        setStatus("COMPILATION ERROR");
+        setErrors([e.message || "System Error"]);
+        setStatus("SYSTEM ABEND");
     }
   }, [code, handleRuntimeInput]);
 
@@ -166,6 +215,7 @@ const App: React.FC = () => {
     setLogs([]);
     setErrors([]);
     setValidationErrors([]);
+    setAst(undefined);
     setCopybookLibrary(new Map());
     setStatus("READY");
   }, []);
@@ -186,6 +236,7 @@ const App: React.FC = () => {
         setLogs([]);
         setErrors([]);
         setValidationErrors([]);
+        setAst(undefined);
         setStatus(`LOADED: ${file.name.toUpperCase().substring(0, 8)}`);
       }
     };
@@ -193,10 +244,16 @@ const App: React.FC = () => {
     event.target.value = '';
   };
 
+  // Initial Run to populate AST (Silent)
+  useEffect(() => {
+     // Optional: Run parsing silently on mount to get initial highlighting
+     // But strictly we might just want to wait for user or use fallback highlighting
+     runCode();
+  }, []);
+
   // Keyboard Shortcuts Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Disable shortcuts if modal is open
       if (isInputOpen || missingCopy) return;
 
       if (e.key === 'F1') {
@@ -230,7 +287,6 @@ const App: React.FC = () => {
             accept=".txt,.cbl,.cob,.cobol"
         />
         
-        {/* Runtime Input Modal */}
         <InputModal 
             isOpen={isInputOpen}
             variableName={inputData.variableName}
@@ -239,7 +295,6 @@ const App: React.FC = () => {
             onSubmit={handleInputSubmit}
         />
 
-        {/* Copybook Request Modal */}
         <CopybookModal
             isOpen={!!missingCopy}
             copybookName={missingCopy?.name || ""}
@@ -255,6 +310,7 @@ const App: React.FC = () => {
              setCode(newCode);
           }} 
           errors={validationErrors}
+          ast={ast}
         />
         <Sysout logs={logs} errors={errors} />
     </MainframeLayout>
