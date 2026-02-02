@@ -22,13 +22,23 @@ export interface Token {
   column: number;
 }
 
-// --- AST Nodes ---
+// --- Structural AST Nodes (New) ---
+
+export interface ASTNode {
+  type: string;
+  startLine: number;
+  endLine: number;
+  children: ASTNode[];
+}
+
+// --- Execution AST Nodes ---
 
 export interface ProgramNode {
   type: 'Program';
   id: string;
   dataDivision: DataDivisionNode;
   procedureDivision: ProcedureDivisionNode;
+  debugAST?: ASTNode; // The structural tree
 }
 
 export interface DataDivisionNode {
@@ -128,3 +138,6 @@ export interface RuntimeResult {
   output: string[];
   errors: string[];
 }
+
+// --- Highlighting Context ---
+export type TokenContext = 'DATA_DIVISION' | 'PROCEDURE_DIVISION' | 'IDENTIFICATION_DIVISION' | 'ENVIRONMENT_DIVISION' | 'UNKNOWN';
