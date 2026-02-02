@@ -9,6 +9,7 @@ import { Lexer } from './compiler/lexer';
 import { Parser } from './compiler/parser';
 import { Runtime } from './compiler/runtime';
 import { Validator, ValidationError } from './compiler/validator';
+import { SemanticValidator } from './compiler/semantic';
 import { Preprocessor, PreprocessorResult } from './compiler/preprocessor';
 import { SAMPLE_CODE } from './constants';
 import { ASTNode } from './compiler/types';
@@ -121,14 +122,12 @@ const App: React.FC = () => {
 
         const expandedSource = prepResult.expandedSource;
 
-        // 2. Validator
+        // 2. Validator (Structural)
         const valErrors = Validator.validate(expandedSource);
         
-        // Split errors based on severity
-        const severeErrors = valErrors.filter(e => e.severity === 'ERROR');
-        const nonSevereErrors = valErrors.filter(e => e.severity === 'WARNING' || e.severity === 'INFO');
+        let severeErrors = valErrors.filter(e => e.severity === 'ERROR');
+        let nonSevereErrors = valErrors.filter(e => e.severity === 'WARNING' || e.severity === 'INFO');
 
-        // Always show validations in Editor
         setValidationErrors(valErrors);
 
         // Populate initial non-severe messages to Sysout
@@ -139,12 +138,11 @@ const App: React.FC = () => {
              setErrors(formattedMsgs);
         }
 
-        // Check blocking errors
+        // Check blocking errors from Validator
         if (severeErrors.length > 0) {
             const formattedErrors = severeErrors.map(e => 
                 `${e.code} ${e.message}\nLINE ${e.line}, COLUMN ${e.column}.`
             );
-            // Prepend severe errors to any existing warnings
             setErrors(prev => [...formattedErrors, ...prev]);
             setStatus("COMPILATION ERROR");
             return; // STRICT BLOCK
@@ -161,6 +159,31 @@ const App: React.FC = () => {
             // Success! Update AST
             setAst(parsedProgram.debugAST);
 
+            // 4. Semantic Validation (New Step)
+            const semanticErrors = SemanticValidator.validate(parsedProgram);
+            
+            // Merge semantic errors into the UI
+            setValidationErrors(prev => [...prev, ...semanticErrors]);
+            
+            const semanticSeveres = semanticErrors.filter(e => e.severity === 'ERROR');
+            const semanticWarnings = semanticErrors.filter(e => e.severity === 'WARNING');
+
+            if (semanticWarnings.length > 0) {
+                const formattedWarns = semanticWarnings.map(e => 
+                    `${e.code} ${e.message}\nLINE ${e.line}.`
+                );
+                setErrors(prev => [...prev, ...formattedWarns]);
+            }
+
+            if (semanticSeveres.length > 0) {
+                const formattedErrs = semanticSeveres.map(e => 
+                    `${e.code} ${e.message}\nLINE ${e.line}.`
+                );
+                setErrors(prev => [...formattedErrs, ...prev]);
+                setStatus("SEMANTIC ERROR");
+                return; // STOP execution if semantic errors exist
+            }
+
             setStatus("EXECUTING...");
 
             // 5. Runtime (Only reached if no severe errors occurred)
@@ -175,8 +198,6 @@ const App: React.FC = () => {
                     setErrors(prev => [...prev, ...result.errors]);
                 }
                 
-                // If we had compilation warnings but runtime succeeded, status is OK (but MAXCC=4 in Sysout)
-                // If runtime failed, JOB FAILED
                 setStatus(result.errors.length > 0 ? "JOB FAILED" : "JOB ENDED");
             }, 100);
 
@@ -246,8 +267,6 @@ const App: React.FC = () => {
 
   // Initial Run to populate AST (Silent)
   useEffect(() => {
-     // Optional: Run parsing silently on mount to get initial highlighting
-     // But strictly we might just want to wait for user or use fallback highlighting
      runCode();
   }, []);
 
