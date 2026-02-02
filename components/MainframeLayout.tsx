@@ -23,7 +23,7 @@ export const MainframeLayout: React.FC<MainframeLayoutProps> = ({ children, onRu
                 <span className="font-bold tracking-widest">ISPF PRIMARY OPTION MENU</span>
             </div>
             <div className="text-cyan-300 hidden sm:block">
-                USER=ADMIN &nbsp; TERM=3278-2 &nbsp; {new Date().toLocaleTimeString()}
+                USER=TIAGO &nbsp; TERM=3278-2 &nbsp; {new Date().toLocaleTimeString()}
             </div>
         </div>
 

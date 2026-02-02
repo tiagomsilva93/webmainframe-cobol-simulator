@@ -1,24 +1,24 @@
 
 import React, { useRef, useMemo } from 'react';
-import { ValidationError } from '../compiler/validator';
-import { SyntaxHighlighter, HighlightToken } from '../compiler/syntaxHighlighter';
+import { ValidationError, Severity } from '../compiler/validator';
+import { SyntaxHighlighter, HighlightToken, TokenType } from '../compiler/syntaxHighlighter';
+import { ASTNode } from '../compiler/types';
 
 interface EditorProps {
   code: string;
   onChange: (val: string) => void;
   errors?: ValidationError[];
+  ast?: ASTNode;
 }
 
-export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [] }) => {
+export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [], ast }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const linesRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   
-  // Calculate lines dynamically based on content + buffer
   const codeLines = code.split('\n');
-  const lineCount = codeLines.length;
   const minLines = 50; 
-  const totalLines = Math.max(lineCount, minLines);
+  const totalLines = Math.max(codeLines.length, minLines);
 
   const handleScroll = () => {
     if (textareaRef.current) {
@@ -35,52 +35,37 @@ export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [] }) =
   const RULER_TEXT = "      * A   B                                                               ";
   const RULER_SCALE= "----+----1----+----2----+----3----+----4----+----5----+----6----+----7----+----8";
 
-  // Common styles to ensure perfect alignment between Textarea and Overlay
   const FONT_STYLE = { 
     fontFamily: "'VT323', monospace", 
-    fontSize: '1.25rem',  // Approx 20px
-    lineHeight: '1.5rem', // 24px
+    fontSize: '1.25rem',
+    lineHeight: '1.5rem',
     letterSpacing: 'normal'
   };
 
-  // Helper to map token types to Tailwind classes
-  const getTokenClass = (type: string) => {
-    switch (type) {
+  const getTokenClass = (token: HighlightToken, severity: Severity | null) => {
+    // Error Overrides
+    if (severity === 'ERROR') return 'text-red-500 underline decoration-wavy font-bold decoration-2';
+    if (severity === 'WARNING') return 'text-yellow-500 underline decoration-dotted decoration-2';
+    if (severity === 'INFO') return 'text-gray-500 underline decoration-dashed opacity-80';
+
+    // Token Colors per Request
+    switch (token.type) {
+      case 'keyword': return 'text-blue-400 font-bold';       // Blue
+      case 'identifier': return 'text-gray-100';              // White
+      case 'literal_string': return 'text-green-400';         // Green
+      case 'literal_number': return 'text-yellow-300';        // Yellow
+      case 'comment': return 'text-gray-500 italic';          // Gray
+      case 'operator': return 'text-purple-400 font-bold';    // Purple
+      case 'error': return 'bg-red-900/40 text-red-300';      // Red (Background for serious formatting errors)
       case 'sequence': return 'text-gray-600';
       case 'indicator': return 'text-yellow-600';
-      case 'comment': return 'text-gray-500 italic opacity-80';
-      case 'structure': return 'text-cyan-300 font-bold';
-      
-      // Control Verbs (IF, PERFORM) -> Bold Light Green
-      case 'verb_control': return 'text-green-300 font-bold brightness-110';
-      
-      // Operational Verbs (MOVE, ADD) -> Standard Green
-      case 'verb_op': return 'text-green-500';
-      
-      // Operators (=, >, <) -> White/Gray
-      case 'operator': return 'text-gray-300 font-bold';
-      
-      // Levels (01, 77) -> Magenta
-      case 'level': return 'text-purple-400 font-bold';
-      case 'level_warning': return 'text-yellow-500 underline decoration-wavy';
-      
-      // Literals
-      case 'literal_text': return 'text-yellow-300'; // Text = Yellow
-      case 'literal_number': return 'text-cyan-200'; // Numbers = Cyan Light
-      
-      // Identifiers
-      case 'identifier': return 'text-green-600'; // Standard
-      case 'identifier_cond': return 'text-green-400 brightness-110'; // In context
-      
-      case 'overflow': return 'bg-red-900/40 text-red-300';
-      case 'error': return 'text-red-500 underline decoration-wavy';
-      default: return 'text-green-600'; 
+      default: return 'text-gray-300';
     }
   };
 
   const highlightedLines = useMemo(() => {
-    return codeLines.map(line => SyntaxHighlighter.highlightLine(line));
-  }, [codeLines]);
+    return codeLines.map((line, idx) => SyntaxHighlighter.highlightLine(line, idx + 1, ast));
+  }, [codeLines, ast]);
 
   return (
     <div className="flex-1 h-full flex flex-col border-r border-gray-700 bg-black">
@@ -112,46 +97,42 @@ export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [] }) =
 
             <div className="relative flex-1 h-full w-full">
                 
-                {/* Highlight Overlay (Behind Textarea) */}
+                {/* Highlight Overlay */}
                 <div 
                     ref={overlayRef}
                     className="absolute inset-0 p-2 overflow-auto whitespace-pre z-0 pointer-events-none"
                     style={FONT_STYLE}
                 >
                     {highlightedLines.map((tokens, i) => {
-                        const error = errors.find(e => e.line === i + 1);
+                        const lineErrors = errors.filter(e => e.line === i + 1);
                         
                         return (
                           <div key={i} className="relative h-6 w-full">
-                            {/* Syntax Highlighting */}
-                            {tokens.map((token, tIdx) => (
-                              <span key={tIdx} className={getTokenClass(token.type)}>
-                                {token.text}
-                              </span>
-                            ))}
+                            {tokens.map((token, tIdx) => {
+                                const tokenErrors = lineErrors.filter(e => {
+                                    const tStart = token.startColumn;
+                                    const tEnd = tStart + token.text.length;
+                                    return e.column >= tStart && e.column < tEnd + 1;
+                                });
 
-                            {/* Error Underline/Marker */}
-                            {error && (
-                                <span className="absolute left-0 bottom-0 w-full border-b-2 border-red-500/50 pointer-events-none">
-                                </span>
-                            )}
-                            {/* Error Caret */}
-                            {error && (
-                                <span 
-                                  className="absolute text-red-500 font-bold -bottom-1 z-30" 
-                                  style={{ left: `calc(${error.column - 1}ch)` }}
-                                >
-                                  ^
-                                </span>
-                            )}
+                                let severity: Severity | null = null;
+                                if (tokenErrors.some(e => e.severity === 'ERROR')) severity = 'ERROR';
+                                else if (tokenErrors.some(e => e.severity === 'WARNING')) severity = 'WARNING';
+                                else if (tokenErrors.some(e => e.severity === 'INFO')) severity = 'INFO';
+                                
+                                return (
+                                  <span key={tIdx} className={getTokenClass(token, severity)}>
+                                    {token.text}
+                                  </span>
+                                );
+                            })}
                           </div>
                         );
                     })}
-                    {/* Padding for scroll */}
                     <div className="h-48"></div>
                 </div>
 
-                {/* Interactive Textarea (Transparent) */}
+                {/* Textarea */}
                 <textarea
                     ref={textareaRef}
                     onScroll={handleScroll}
