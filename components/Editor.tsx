@@ -1,17 +1,17 @@
 
 import React, { useRef, useMemo } from 'react';
-import { ValidationError, Severity } from '../compiler/validator';
-import { SyntaxHighlighter, HighlightToken, TokenType } from '../compiler/syntaxHighlighter';
-import { ASTNode } from '../compiler/types';
+import { Diagnostic } from '../compiler/types';
+import { SyntaxHighlighter } from '../compiler/syntaxHighlighter';
+import { Token, TokenType } from '../compiler/types';
 
 interface EditorProps {
   code: string;
   onChange: (val: string) => void;
-  errors?: ValidationError[];
-  ast?: ASTNode;
+  tokens: Token[];
+  diagnostics: Diagnostic[];
 }
 
-export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [], ast }) => {
+export const Editor: React.FC<EditorProps> = ({ code, onChange, tokens, diagnostics }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const linesRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -42,30 +42,85 @@ export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [], ast
     letterSpacing: 'normal'
   };
 
-  const getTokenClass = (token: HighlightToken, severity: Severity | null) => {
-    // Error Overrides
-    if (severity === 'ERROR') return 'text-red-500 underline decoration-wavy font-bold decoration-2';
-    if (severity === 'WARNING') return 'text-yellow-500 underline decoration-dotted decoration-2';
-    if (severity === 'INFO') return 'text-gray-500 underline decoration-dashed opacity-80';
+  // Group tokens by line once when input changes
+  const tokensByLine = useMemo(() => {
+    return SyntaxHighlighter.groupTokensByLine(tokens, codeLines.length);
+  }, [tokens, codeLines.length]);
 
-    // Token Colors per Request
-    switch (token.type) {
-      case 'keyword': return 'text-blue-400 font-bold';       // Blue
-      case 'identifier': return 'text-gray-100';              // White
-      case 'literal_string': return 'text-green-400';         // Green
-      case 'literal_number': return 'text-yellow-300';        // Yellow
-      case 'comment': return 'text-gray-500 italic';          // Gray
-      case 'operator': return 'text-purple-400 font-bold';    // Purple
-      case 'error': return 'bg-red-900/40 text-red-300';      // Red (Background for serious formatting errors)
-      case 'sequence': return 'text-gray-600';
-      case 'indicator': return 'text-yellow-600';
-      default: return 'text-gray-300';
+  /**
+   * Renders a single line of code by combining Tokens and Raw Text (gaps/comments).
+   */
+  const renderLine = (lineIndex: number, lineContent: string) => {
+    const lineNum = lineIndex + 1;
+    const lineTokens = tokensByLine[lineNum] || [];
+    
+    // Check if line is a comment (Lexer discards them, so we check raw text)
+    const indicator = lineContent[6];
+    const isComment = lineContent.length >= 7 && (indicator === '*' || indicator === '/');
+
+    if (isComment) {
+       return <span className="text-gray-500 italic">{lineContent}</span>;
     }
-  };
 
-  const highlightedLines = useMemo(() => {
-    return codeLines.map((line, idx) => SyntaxHighlighter.highlightLine(line, idx + 1, ast));
-  }, [codeLines, ast]);
+    const elements: React.ReactNode[] = [];
+    let currentColumn = 1; // 1-based column
+
+    // Process tokens
+    for (const token of lineTokens) {
+        // 1. Fill gap before token (whitespace)
+        if (token.column > currentColumn) {
+            const gap = lineContent.substring(currentColumn - 1, token.column - 1);
+            elements.push(<span key={`gap-${currentColumn}`} className="text-gray-500 opacity-50">{gap}</span>);
+            currentColumn = token.column;
+        }
+
+        // 2. Render Token
+        const tokenClass = SyntaxHighlighter.getTokenClass(token.type);
+        
+        // Check for diagnostics on this token
+        const tokenDiags = diagnostics.filter(d => 
+            d.line === lineNum && 
+            d.column >= token.column && 
+            d.column < (token.column + token.value.length)
+        );
+
+        let decorationClass = "";
+        let title = "";
+
+        if (tokenDiags.length > 0) {
+            const severe = tokenDiags.find(d => d.severity === 'ERROR');
+            const warn = tokenDiags.find(d => d.severity === 'WARNING');
+            
+            if (severe) {
+                decorationClass = " underline decoration-wavy decoration-red-500 underline-offset-4";
+                title = severe.message;
+            } else if (warn) {
+                decorationClass = " underline decoration-dotted decoration-yellow-500 underline-offset-4";
+                title = warn.message;
+            }
+        }
+
+        elements.push(
+            <span 
+                key={`tok-${token.column}`} 
+                className={`${tokenClass} ${decorationClass}`}
+                title={title}
+            >
+                {token.value}
+            </span>
+        );
+
+        currentColumn += token.value.length;
+    }
+
+    // 3. Fill remaining gap after last token
+    if (currentColumn <= lineContent.length) {
+        const remaining = lineContent.substring(currentColumn - 1);
+        elements.push(<span key={`gap-end`} className="text-gray-500 opacity-50">{remaining}</span>);
+    }
+
+    return elements;
+  };
 
   return (
     <div className="flex-1 h-full flex flex-col border-r border-gray-700 bg-black">
@@ -103,32 +158,11 @@ export const Editor: React.FC<EditorProps> = ({ code, onChange, errors = [], ast
                     className="absolute inset-0 p-2 overflow-auto whitespace-pre z-0 pointer-events-none"
                     style={FONT_STYLE}
                 >
-                    {highlightedLines.map((tokens, i) => {
-                        const lineErrors = errors.filter(e => e.line === i + 1);
-                        
-                        return (
-                          <div key={i} className="relative h-6 w-full">
-                            {tokens.map((token, tIdx) => {
-                                const tokenErrors = lineErrors.filter(e => {
-                                    const tStart = token.startColumn;
-                                    const tEnd = tStart + token.text.length;
-                                    return e.column >= tStart && e.column < tEnd + 1;
-                                });
-
-                                let severity: Severity | null = null;
-                                if (tokenErrors.some(e => e.severity === 'ERROR')) severity = 'ERROR';
-                                else if (tokenErrors.some(e => e.severity === 'WARNING')) severity = 'WARNING';
-                                else if (tokenErrors.some(e => e.severity === 'INFO')) severity = 'INFO';
-                                
-                                return (
-                                  <span key={tIdx} className={getTokenClass(token, severity)}>
-                                    {token.text}
-                                  </span>
-                                );
-                            })}
-                          </div>
-                        );
-                    })}
+                    {codeLines.map((line, i) => (
+                        <div key={i} className="relative h-6 w-full">
+                            {renderLine(i, line)}
+                        </div>
+                    ))}
                     <div className="h-48"></div>
                 </div>
 

@@ -1,32 +1,43 @@
 
-import React from 'react';
+import React, { useMemo } from 'react';
+import { Diagnostic } from '../compiler/types';
 
 interface SysoutProps {
   logs: string[];
-  errors: string[];
+  diagnostics: Diagnostic[];
 }
 
-export const Sysout: React.FC<SysoutProps> = ({ logs, errors }) => {
+export const Sysout: React.FC<SysoutProps> = ({ logs, diagnostics }) => {
   
-  const getLineClass = (text: string) => {
-    // Errors: Red + Bold
-    if (text.includes('-S ') || text.includes('ERROR:')) return 'text-red-500 font-bold';
-    
-    // Warnings: Yellow (Normal weight per requirement)
-    if (text.includes('-W ')) return 'text-yellow-500';
-    
-    // Info: Gray (Normal weight)
-    if (text.includes('-I ')) return 'text-gray-500';
-    
-    // Default log output (DISPLAY statements)
-    return 'text-cyan-400';
+  // Sort diagnostics: Line -> Column -> Severity
+  const sortedDiagnostics = useMemo(() => {
+     return [...diagnostics].sort((a, b) => {
+         if (a.line !== b.line) return a.line - b.line;
+         if (a.column !== b.column) return a.column - b.column;
+         return a.severity === 'ERROR' ? -1 : 1;
+     });
+  }, [diagnostics]);
+
+  const getLineClass = (diag: Diagnostic) => {
+    switch (diag.severity) {
+        case 'ERROR': return 'text-red-500 font-bold';
+        case 'WARNING': return 'text-yellow-500';
+        case 'INFO': return 'text-gray-500';
+        default: return 'text-white';
+    }
+  };
+
+  const getSeverityChar = (severity: string) => {
+      if (severity === 'ERROR') return 'S'; // Severe
+      if (severity === 'WARNING') return 'W';
+      return 'I';
   };
 
   return (
     <div className="flex-1 h-full flex flex-col bg-[#101010]">
       <div className="bg-neutral-800 text-white px-2 py-1 text-xs border-b border-gray-700 font-bold flex justify-between shrink-0">
         <span>SDSF OUTPUT DISPLAY - JOB00152</span>
-        <span>LINE 0 TO {logs.length + errors.length} OF {logs.length + errors.length}</span>
+        <span>LINE 0 TO {logs.length + sortedDiagnostics.length} OF {logs.length + sortedDiagnostics.length}</span>
       </div>
       
       <div className="flex-1 p-4 font-mono overflow-scroll" style={{ fontFamily: "'VT323', monospace", fontSize: '1.2rem' }}>
@@ -39,12 +50,19 @@ export const Sysout: React.FC<SysoutProps> = ({ logs, errors }) => {
             -------------------------------------------------<br/>
         </div>
 
-        {errors.map((err, i) => (
-            <div key={`err-${i}`} className={`mb-1 whitespace-pre ${getLineClass(err)}`}>
-                {err}
+        {/* Compile Diagnostics */}
+        {sortedDiagnostics.length > 0 && (
+            <div className="mb-4 border-b border-gray-700 pb-2">
+                <div className="text-white font-bold mb-1">COMPILER DIAGNOSTICS:</div>
+                {sortedDiagnostics.map((diag, i) => (
+                    <div key={`diag-${i}`} className={`mb-1 whitespace-pre ${getLineClass(diag)}`}>
+                        {diag.code}-{getSeverityChar(diag.severity)} LINE {diag.line}, COL {diag.column}: {diag.message}
+                    </div>
+                ))}
             </div>
-        ))}
+        )}
 
+        {/* Runtime Logs */}
         {logs.map((log, i) => (
             <div key={i} className="mb-1 whitespace-pre text-cyan-400">
                 {log}
@@ -52,7 +70,7 @@ export const Sysout: React.FC<SysoutProps> = ({ logs, errors }) => {
         ))}
         
         <div className="mt-4 text-white opacity-50 text-cyan-400">
-           ------ MAXCC={errors.some(e => e.includes('-S') || e.includes('ERROR')) ? '0012' : (errors.some(e => e.includes('-W')) ? '0004' : '0000')} ------
+           ------ MAXCC={sortedDiagnostics.some(e => e.severity === 'ERROR') ? '0012' : (sortedDiagnostics.some(e => e.severity === 'WARNING') ? '0004' : '0000')} ------
         </div>
       </div>
     </div>
