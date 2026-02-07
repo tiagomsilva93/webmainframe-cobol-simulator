@@ -1,3 +1,4 @@
+
 export const SAMPLE_CODE = `000100 IDENTIFICATION DIVISION.
 000200 PROGRAM-ID. HELLO-WORLD.
 000300
@@ -32,3 +33,52 @@ export const SAMPLE_CODE = `000100 IDENTIFICATION DIVISION.
 003200     END-IF.
 003300
 003400     STOP RUN.`;
+
+export const PANEL_ISR_PRIM = `)ATTR
+  % TYPE(TEXT) INTENS(HIGH) COLOR(WHITE)
+  + TYPE(TEXT) INTENS(LOW)  COLOR(GREEN)
+  _ TYPE(INPUT) INTENS(HIGH) COLOR(RED) CAPS(ON)
+)BODY
+%-----------------------  ISPF PRIMARY OPTION MENU  ------------------------
+%OPTION  ===>_ZCMD                                                             +
+%                                                           +USERID   - &ZUSER
+%   0 +Settings      Terminal and user parameters           +TIME     - &ZTIME
+%   1 +View          Display source data or listings        +DATE     - &ZDATE
+%   2 +Edit          Create or change source data
+%   3 +Utilities     Perform utility functions
+%   4 +Foreground    Interactive language processing
+%   5 +Batch         Submit job for batch processing
+%   6 +Command       Enter TSO or Workstation commands
+%   7 +Dialog Test   Perform dialog testing
+%   X +Exit          Terminate ISPF using log and list defaults
+%
++Enter%END+command to terminate ISPF.
+%
+)PROC
+  &ZSEL = TRANS( TRUNC (&ZCMD,'.')
+                0,'PANEL(ISPOPT)'
+                1,'PGM(VIEW)'
+                2,'PGM(EDIT)'
+                3,'PGM(UTIL)'
+                4,'PGM(FORE)'
+                5,'PGM(BATCH)'
+                6,'PGM(TSO)'
+                X,'EXIT'
+                *,'?' )
+)END`;
+
+export const PANEL_ISPOPT = `)ATTR
+  % TYPE(TEXT) INTENS(HIGH) COLOR(WHITE)
+  + TYPE(TEXT) INTENS(LOW)  COLOR(GREEN)
+  _ TYPE(INPUT) INTENS(HIGH) COLOR(RED) CAPS(ON)
+)BODY
+%-----------------------  ISPF SETTINGS  -----------------------------------
+%COMMAND ===>_ZCMD                                                             +
+%
+%   Log/List ...
+%
+%   Function keys ...
+%
++Press%F3+to Exit.
+)PROC
+)END`;

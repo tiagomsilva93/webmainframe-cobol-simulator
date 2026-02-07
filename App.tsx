@@ -3,46 +3,107 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { MainframeLayout } from './components/MainframeLayout';
 import { Editor } from './components/Editor';
 import { Sysout } from './components/Sysout';
+import { Screen } from './components/Screen';
+import { IspfEditor } from './components/IspfEditor';
 import { InputModal } from './components/InputModal';
-import { CopybookModal } from './components/CopybookModal';
 import { Lexer } from './compiler/lexer';
 import { Parser } from './compiler/parser';
-import { Runtime } from './compiler/runtime';
-import { Validator, ValidationError } from './compiler/validator';
-import { SemanticValidator } from './compiler/semantic';
-import { Preprocessor, PreprocessorResult } from './compiler/preprocessor';
-import { SAMPLE_CODE } from './constants';
-import { ASTNode } from './compiler/types';
+import { Runtime, ScreenChar } from './compiler/runtime';
+import { IspfRuntime } from './compiler/ispf';
+import { Validator } from './compiler/validator';
+import { Preprocessor } from './compiler/preprocessor';
+import { SAMPLE_CODE, PANEL_ISR_PRIM, PANEL_ISPOPT } from './constants';
+import { Token, Diagnostic, ProgramNode } from './compiler/types';
 
+// ... (InputRequest interface kept)
 interface InputRequest {
   variableName: string;
   picType: 'X' | '9';
   picLength: number;
 }
 
-interface MissingCopyState {
-  name: string;
-  line: number;
-  col: number;
-}
-
 const App: React.FC = () => {
-  const [code, setCode] = useState(SAMPLE_CODE);
+  // Global State
+  const [currentView, setCurrentView] = useState<'ISPF' | 'ISPF_EDIT' | 'COBOL_RUN' | 'SYSOUT'>('ISPF');
+  const [status, setStatus] = useState("ISPF ACTIVE");
+  
+  // Data State
+  const [datasetContent, setDatasetContent] = useState(SAMPLE_CODE);
   const [logs, setLogs] = useState<string[]>([]);
-  const [errors, setErrors] = useState<string[]>([]); 
-  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]); 
-  const [status, setStatus] = useState("READY");
-  const [ast, setAst] = useState<ASTNode | undefined>(undefined);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
 
-  // Runtime Input Modal State
+  // ISPF Runtime
+  const ispfRef = useRef<IspfRuntime>(new IspfRuntime());
+  const [ispfBuffer, setIspfBuffer] = useState<ScreenChar[]>([]);
+
+  // COBOL Runtime
   const [isInputOpen, setIsInputOpen] = useState(false);
   const [inputData, setInputData] = useState<InputRequest>({ variableName: '', picType: 'X', picLength: 0 });
   const inputResolveRef = useRef<((value: string) => void) | null>(null);
+  const [cicsBuffer, setCicsBuffer] = useState<ScreenChar[]>(Array(24*80).fill({char:' ', attr:0}));
+  const [isWaitingForScreen, setIsWaitingForScreen] = useState(false);
+  const screenResolveRef = useRef<(() => void) | null>(null);
+  const cobolRuntimeRef = useRef<Runtime | null>(null);
 
-  // Copybook Handling State
-  const [copybookLibrary, setCopybookLibrary] = useState<Map<string, string>>(new Map());
-  const [missingCopy, setMissingCopy] = useState<MissingCopyState | null>(null);
+  // Init ISPF
+  useEffect(() => {
+      const ispf = ispfRef.current;
+      ispf.registerPanel(PANEL_ISR_PRIM);
+      ispf.registerPanel(PANEL_ISPOPT);
+      ispf.start('UNKNOWN'); // Registering names manually above, but start needs name
+      // Hack: Register manually extracts name from )PANEL? No, our parser is simple.
+      // We will re-register with explicit names.
+      // Re-init with correct map keys:
+      // The parsePanel does not return name if not in )PANEL header.
+      // We will force set.
+      ispf['panelRepo'].set('ISR@PRIM', ispf['parsePanel'](PANEL_ISR_PRIM));
+      ispf['panelRepo'].set('ISPOPT', ispf['parsePanel'](PANEL_ISPOPT));
+      
+      ispf.start('ISR@PRIM');
+      setIspfBuffer([...ispf.screenBuffer]);
+  }, []);
+
+  // --- Handlers ---
+
+  const handleIspfInput = (buffer: ScreenChar[]) => {
+      // 1. Update ISPF Runtime
+      ispfRef.current.handleInput(buffer);
+      
+      // 2. Check ZSEL/ZCMD for Navigation
+      const nav = ispfRef.current.evalZSEL();
+      ispfRef.current.clearZCMD();
+      
+      if (nav === 'PGM(EDIT)') {
+          setCurrentView('ISPF_EDIT');
+          setStatus("ISPF EDITOR");
+      } 
+      else if (nav === 'PGM(VIEW)' || nav === 'PGM(UTIL)') {
+          // For Sim: View = Run/Compile
+          runCompilationProcess();
+      }
+      else if (nav === 'EXIT') {
+          // Reset to PRIM
+          ispfRef.current.start('ISR@PRIM');
+          setIspfBuffer([...ispfRef.current.screenBuffer]);
+      }
+      else {
+          // Just rerender ISPF
+          setIspfBuffer([...ispfRef.current.screenBuffer]);
+      }
+  };
+
+  const handleEditorSave = (newContent: string) => {
+      setDatasetContent(newContent);
+  };
+
+  const handleEditorExit = () => {
+      setCurrentView('ISPF');
+      setStatus("ISPF PRIMARY OPTION MENU");
+      ispfRef.current.start('ISR@PRIM');
+      setIspfBuffer([...ispfRef.current.screenBuffer]);
+  };
+
+  // --- COBOL Compilation & Run (reused from previous step) ---
 
   const handleRuntimeInput = useCallback((variableName: string, picType: 'X'|'9', length: number): Promise<string> => {
     return new Promise((resolve) => {
@@ -52,7 +113,30 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const handleInputSubmit = (value: string) => {
+  const handleScreenUpdate = useCallback((buffer: ScreenChar[]) => {
+      setCicsBuffer(buffer);
+  }, []);
+
+  const handleScreenInputRequest = useCallback((): Promise<void> => {
+      setIsWaitingForScreen(true);
+      return new Promise((resolve) => {
+          screenResolveRef.current = resolve;
+      });
+  }, []);
+
+  const handleCicsInputSubmit = (finalBuffer: ScreenChar[]) => {
+      if (isWaitingForScreen && screenResolveRef.current) {
+          if (cobolRuntimeRef.current) {
+               const ctx = cobolRuntimeRef.current.getCICSContext();
+               for(let i=0; i<finalBuffer.length; i++) ctx.screenBuffer[i] = finalBuffer[i];
+          }
+          setIsWaitingForScreen(false);
+          screenResolveRef.current();
+          screenResolveRef.current = null;
+      }
+  };
+
+  const handleInputModalSubmit = (value: string) => {
     setIsInputOpen(false);
     if (inputResolveRef.current) {
         inputResolveRef.current(value);
@@ -60,278 +144,104 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Copybook Modal Handlers ---
-
-  const handleCopybookSubmit = (content: string) => {
-    if (!missingCopy) return;
-    
-    // Register the new copybook
-    const newLib = new Map(copybookLibrary);
-    newLib.set(missingCopy.name, content);
-    setCopybookLibrary(newLib);
-    setMissingCopy(null);
-
-    // Resume Compilation immediately
-    runCompilationProcess(newLib); 
-  };
-
-  const handleCopybookCancel = () => {
-    if (missingCopy) {
-      setErrors([
-         `IGYDS1089-S COPYBOOK ${missingCopy.name} NOT FOUND.`,
-         `LINE ${missingCopy.line}, COLUMN ${missingCopy.col}.`,
-         `COMPILATION CANCELLED BY USER.`
-      ]);
-      setStatus("COMPILATION FAILED");
-      setMissingCopy(null);
-    }
-  };
-
-  // --- Main Compilation Process ---
-
-  const runCode = () => {
-    runCompilationProcess(new Map());
-  };
-
-  const runCompilationProcess = useCallback(async (currentLibrary: Map<string, string>) => {
-    setStatus("PRE-PROCESSING...");
-    setErrors([]);
-    setValidationErrors([]);
-    setLogs([]); 
-    // Do not clear AST immediately to prevent flashing, update it on successful parse
-
-    // 1. Preprocessor (Expand COPY statements)
-    try {
-        const prepResult = Preprocessor.process(code, currentLibrary);
-
-        if (prepResult.missingCopy) {
-            setMissingCopy({
-                name: prepResult.missingCopy.name,
-                line: prepResult.missingCopy.line,
-                col: prepResult.missingCopy.column
-            });
-            setStatus("WAITING FOR COPYBOOK");
-            return; // PAUSE here
-        }
-
-        if (prepResult.error) {
-            setErrors([prepResult.error]);
-            setStatus("PRE-PROCESS ERROR");
-            return; // ABORT
-        }
-
-        const expandedSource = prepResult.expandedSource;
-
-        // 2. Validator (Structural)
-        const valErrors = Validator.validate(expandedSource);
-        
-        let severeErrors = valErrors.filter(e => e.severity === 'ERROR');
-        let nonSevereErrors = valErrors.filter(e => e.severity === 'WARNING' || e.severity === 'INFO');
-
-        setValidationErrors(valErrors);
-
-        // Populate initial non-severe messages to Sysout
-        if (nonSevereErrors.length > 0) {
-             const formattedMsgs = nonSevereErrors.map(e => 
-                `${e.code} ${e.message}\nLINE ${e.line}, COLUMN ${e.column}.`
-             );
-             setErrors(formattedMsgs);
-        }
-
-        // Check blocking errors from Validator
-        if (severeErrors.length > 0) {
-            const formattedErrors = severeErrors.map(e => 
-                `${e.code} ${e.message}\nLINE ${e.line}, COLUMN ${e.column}.`
-            );
-            setErrors(prev => [...formattedErrors, ...prev]);
-            setStatus("COMPILATION ERROR");
-            return; // STRICT BLOCK
-        }
-
-        // 3. Lexer & Parser (Wrapped in try/catch for fatal syntax errors)
-        try {
-            const lexer = new Lexer(expandedSource);
-            const tokens = lexer.tokenize();
-            
-            const parser = new Parser(tokens);
-            const parsedProgram = parser.parse();
-            
-            // Success! Update AST
-            setAst(parsedProgram.debugAST);
-
-            // 4. Semantic Validation (New Step)
-            const semanticErrors = SemanticValidator.validate(parsedProgram);
-            
-            // Merge semantic errors into the UI
-            setValidationErrors(prev => [...prev, ...semanticErrors]);
-            
-            const semanticSeveres = semanticErrors.filter(e => e.severity === 'ERROR');
-            const semanticWarnings = semanticErrors.filter(e => e.severity === 'WARNING');
-
-            if (semanticWarnings.length > 0) {
-                const formattedWarns = semanticWarnings.map(e => 
-                    `${e.code} ${e.message}\nLINE ${e.line}.`
-                );
-                setErrors(prev => [...prev, ...formattedWarns]);
-            }
-
-            if (semanticSeveres.length > 0) {
-                const formattedErrs = semanticSeveres.map(e => 
-                    `${e.code} ${e.message}\nLINE ${e.line}.`
-                );
-                setErrors(prev => [...formattedErrs, ...prev]);
-                setStatus("SEMANTIC ERROR");
-                return; // STOP execution if semantic errors exist
-            }
-
-            setStatus("EXECUTING...");
-
-            // 5. Runtime (Only reached if no severe errors occurred)
-            const runtime = new Runtime(handleRuntimeInput);
-            
-            setTimeout(async () => {
-                const result = await runtime.run(parsedProgram);
-                setLogs(result.output);
-                
-                // Append runtime errors (if any)
-                if (result.errors.length > 0) {
-                    setErrors(prev => [...prev, ...result.errors]);
-                }
-                
-                setStatus(result.errors.length > 0 ? "JOB FAILED" : "JOB ENDED");
-            }, 100);
-
-        } catch (e: any) {
-            // Lexer or Parser Fatal Error
-            console.error(e);
-            const msg = e.message || "Unknown Compilation Error";
-            
-            // Try to extract line/col from error message to show in Editor
-            const match = msg.match(/Line (\d+), Column (\d+)/);
-            if (match) {
-                const line = parseInt(match[1], 10);
-                const col = parseInt(match[2], 10);
-                setValidationErrors(prev => [...prev, {
-                    line,
-                    column: col,
-                    code: 'IGYPS2120-S',
-                    message: msg,
-                    severity: 'ERROR' // Parser errors are fatal
-                }]);
-            }
-
-            setErrors(prev => [msg, ...prev]);
-            setStatus("COMPILATION ERROR");
-        }
-
-    } catch (e: any) {
-        console.error(e);
-        setErrors([e.message || "System Error"]);
-        setStatus("SYSTEM ABEND");
-    }
-  }, [code, handleRuntimeInput]);
-
-  const resetCode = useCallback(() => {
-    setCode(SAMPLE_CODE);
+  const runCompilationProcess = async () => {
+    setStatus("COMPILING...");
+    setCurrentView('SYSOUT');
     setLogs([]);
-    setErrors([]);
-    setValidationErrors([]);
-    setAst(undefined);
-    setCopybookLibrary(new Map());
-    setStatus("READY");
-  }, []);
+    
+    // ... Compile Logic ...
+    const prep = Preprocessor.process(datasetContent, new Map());
+    const tokens = new Lexer(prep.expandedSource).tokenize();
+    let ast: ProgramNode | undefined;
+    try {
+        ast = new Parser(tokens).parse();
+    } catch(e:any) {
+        setLogs([`PARSER ERROR: ${e.message}`]);
+        return;
+    }
+    
+    const errs = Validator.validate(prep.expandedSource);
+    setDiagnostics(errs);
+    
+    if (errs.some(e => e.severity === 'ERROR')) {
+        setStatus("COMPILATION FAILED");
+        return;
+    }
 
-  const triggerFileUpload = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      if (typeof content === 'string') {
-        setCode(content);
-        setLogs([]);
-        setErrors([]);
-        setValidationErrors([]);
-        setAst(undefined);
-        setStatus(`LOADED: ${file.name.toUpperCase().substring(0, 8)}`);
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
+    setStatus("EXECUTING...");
+    setCurrentView('COBOL_RUN'); // If Batch (Text output) -> SYSOUT? If CICS -> COBOL_RUN
+    
+    // Heuristic: If SEND MAP found in tokens, force CICS screen view
+    // For now always use COBOL_RUN which renders Screen OR Logs depending on mode?
+    // We'll overlay Sysout if output is text-only later.
+    
+    const runtime = new Runtime(handleRuntimeInput, handleScreenUpdate, handleScreenInputRequest);
+    cobolRuntimeRef.current = runtime;
+    
+    setTimeout(async () => {
+        const res = await runtime.run(ast!);
+        setLogs(res.output);
+        if (res.errors.length > 0) setStatus("JOB FAILED");
+        else setStatus("JOB ENDED");
+        
+        // If it was batch (no CICS screen usage), show Sysout
+        // We check if screenBuffer is empty or dirty? 
+        // For Sim: Show Sysout always at end.
+        setCurrentView('SYSOUT');
+    }, 100);
   };
-
-  // Initial Run to populate AST (Silent)
-  useEffect(() => {
-     runCode();
-  }, []);
-
-  // Keyboard Shortcuts Handler
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isInputOpen || missingCopy) return;
-
-      if (e.key === 'F1') {
-        e.preventDefault();
-        runCode();
-      } else if (e.key === 'F3') {
-        e.preventDefault();
-        resetCode();
-      } else if (e.key === 'F5') {
-        e.preventDefault();
-        triggerFileUpload();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [runCode, resetCode, triggerFileUpload, isInputOpen, missingCopy]);
 
   return (
     <MainframeLayout 
-        onRun={runCode} 
-        onReset={resetCode} 
-        onLoad={triggerFileUpload}
+        onRun={() => {}} 
+        onReset={() => {}} 
+        onLoad={() => {}} 
         statusMessage={status}
     >
-        <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload} 
-            className="hidden" 
-            accept=".txt,.cbl,.cob,.cobol"
-        />
-        
         <InputModal 
             isOpen={isInputOpen}
             variableName={inputData.variableName}
             picType={inputData.picType}
             picLength={inputData.picLength}
-            onSubmit={handleInputSubmit}
+            onSubmit={handleInputModalSubmit}
         />
 
-        <CopybookModal
-            isOpen={!!missingCopy}
-            copybookName={missingCopy?.name || ""}
-            foundAtLine={missingCopy?.line || 0}
-            foundAtCol={missingCopy?.col || 0}
-            onSubmit={handleCopybookSubmit}
-            onCancel={handleCopybookCancel}
-        />
+        {currentView === 'ISPF' && (
+            <Screen 
+                buffer={ispfBuffer} 
+                onInput={handleIspfInput} 
+                active={true}
+            />
+        )}
 
-        <Editor 
-          code={code} 
-          onChange={(newCode) => {
-             setCode(newCode);
-          }} 
-          errors={validationErrors}
-          ast={ast}
-        />
-        <Sysout logs={logs} errors={errors} />
+        {currentView === 'ISPF_EDIT' && (
+            <div className="w-full h-full">
+                <IspfEditor 
+                    initialContent={datasetContent}
+                    onSave={handleEditorSave}
+                    onExit={handleEditorExit}
+                    datasetName="'USER.COBOL(SOURCE)'"
+                />
+            </div>
+        )}
+
+        {currentView === 'COBOL_RUN' && (
+             <Screen 
+                buffer={cicsBuffer} 
+                onInput={handleCicsInputSubmit} 
+                active={isWaitingForScreen}
+             />
+        )}
+
+        {currentView === 'SYSOUT' && (
+            <div className="flex flex-col w-full h-full relative">
+                 <div className="absolute top-0 right-0 p-2 z-50">
+                     <button onClick={handleEditorExit} className="bg-red-600 text-white px-4 font-bold border border-white">EXIT TO ISPF</button>
+                 </div>
+                 <Sysout logs={logs} diagnostics={diagnostics} />
+            </div>
+        )}
+
     </MainframeLayout>
   );
 };
