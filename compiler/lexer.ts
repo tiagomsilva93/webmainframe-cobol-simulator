@@ -5,36 +5,112 @@ const KEYWORDS: Record<string, TokenType> = {
   'IDENTIFICATION': TokenType.IDENTIFICATION,
   'DIVISION': TokenType.DIVISION,
   'PROGRAM-ID': TokenType.PROGRAM_ID,
+  
   'ENVIRONMENT': TokenType.ENVIRONMENT,
+  'CONFIGURATION': TokenType.CONFIGURATION,
+  'INPUT-OUTPUT': TokenType.INPUT_OUTPUT,
+  'FILE-CONTROL': TokenType.FILE_CONTROL,
+  'SELECT': TokenType.SELECT,
+  'ASSIGN': TokenType.ASSIGN,
+  'ORGANIZATION': TokenType.ORGANIZATION,
+  'LINE': TokenType.LINE,
+  'SEQUENTIAL': TokenType.SEQUENTIAL,
+  'INDEXED': TokenType.INDEXED,
+  'ACCESS': TokenType.ACCESS,
+  'MODE': TokenType.MODE,
+  'DYNAMIC': TokenType.DYNAMIC,
+  'RANDOM': TokenType.RANDOM,
+  'RECORD': TokenType.RECORD,
+  'KEY': TokenType.KEY,
+  'STATUS': TokenType.STATUS,
+
   'DATA': TokenType.DATA,
+  'FILE': TokenType.FILE,
+  'FD': TokenType.FD,
   'WORKING-STORAGE': TokenType.WORKING_STORAGE,
+  'LINKAGE': TokenType.LINKAGE,
   'SECTION': TokenType.SECTION,
+  // CICS MAP SECTION (SIMULATED)
+  'MAP': TokenType.MAP_SECTION, 
+  
   'PROCEDURE': TokenType.PROCEDURE,
   'PIC': TokenType.PIC,
   'VALUE': TokenType.VALUE,
+  
   'MOVE': TokenType.MOVE,
   'ADD': TokenType.ADD,
   'SUBTRACT': TokenType.SUBTRACT,
+  'MULTIPLY': TokenType.MULTIPLY,
+  'DIVIDE': TokenType.DIVIDE,
   'COMPUTE': TokenType.COMPUTE,
   'TO': TokenType.TO,
   'FROM': TokenType.FROM,
+  'BY': TokenType.BY,
+  'INTO': TokenType.INTO,
+  
   'IF': TokenType.IF,
   'THEN': TokenType.THEN,
   'ELSE': TokenType.ELSE,
   'END-IF': TokenType.END_IF,
+  
   'PERFORM': TokenType.PERFORM,
   'UNTIL': TokenType.UNTIL,
   'TIMES': TokenType.TIMES,
   'END-PERFORM': TokenType.END_PERFORM,
+  
   'ACCEPT': TokenType.ACCEPT,
   'DISPLAY': TokenType.DISPLAY,
   'STOP': TokenType.STOP,
   'RUN': TokenType.RUN,
+  'CALL': TokenType.CALL,
+  'USING': TokenType.USING,
+  'EXIT': TokenType.EXIT,
+  'PROGRAM': TokenType.PROGRAM,
+  'GOBACK': TokenType.GOBACK,
+
+  'OPEN': TokenType.OPEN,
+  'CLOSE': TokenType.CLOSE,
+  'READ': TokenType.READ,
+  'WRITE': TokenType.WRITE,
+  'REWRITE': TokenType.REWRITE,
+  'DELETE': TokenType.DELETE,
+  'START': TokenType.START,
+  'INPUT': TokenType.INPUT,
+  'OUTPUT': TokenType.OUTPUT,
+  'I-O': TokenType.I_O,
+  'EXTEND': TokenType.EXTEND,
+  'AT': TokenType.AT,
+  'END': TokenType.END,
+  'INVALID': TokenType.INVALID,
+  'NOT': TokenType.NOT,
+
+  'EXEC': TokenType.EXEC,
+  'CICS': TokenType.CICS,
+  'END-EXEC': TokenType.END_EXEC,
+  'SEND': TokenType.SEND,
+  'RECEIVE': TokenType.RECEIVE,
+  // 'MAP': TokenType.MAP, // Collision with MAP SECTION, handled in context
+  'MAPSET': TokenType.MAPSET,
+  'TRANSID': TokenType.TRANSID,
+  'COMMAREA': TokenType.COMMAREA,
+  'LENGTH': TokenType.LENGTH,
+  'RIDFLD': TokenType.RIDFLD,
+  'HANDLE': TokenType.HANDLE,
+  'CONDITION': TokenType.CONDITION,
+  'LINK': TokenType.LINK,
+  'RETURN': TokenType.RETURN_CICS,
+  
+  // BMS Macros
+  'DFHMDF': TokenType.DFHMDF,
+  'POS': TokenType.POS,
+  'NAME': TokenType.NAME,
+
   'ZERO': TokenType.ZERO,
   'ZEROS': TokenType.ZERO,
   'ZEROES': TokenType.ZERO,
   'SPACE': TokenType.SPACE,
-  'SPACES': TokenType.SPACE
+  'SPACES': TokenType.SPACE,
+  'IS': TokenType.IS
 };
 
 export class Lexer {
@@ -45,7 +121,7 @@ export class Lexer {
   }
 
   private isAlphaNumeric(char: string): boolean {
-    return /^[a-zA-Z0-9\-]+$/.test(char);
+    return /^[a-zA-Z0-9\-_]+$/.test(char);
   }
 
   private isDigit(char: string): boolean {
@@ -60,26 +136,12 @@ export class Lexer {
       const rawLine = lines[i];
       const lineNum = i + 1;
 
-      // Normalization Rule 1: Lines shorter than 7 chars are effectively empty in Fixed Format
-      // (Area B starts at index 7 / col 8, but actually meaningful code starts at col 8 or 12)
-      // We need to at least check index 6 (col 7)
       if (rawLine.length < 7) continue;
 
-      // Normalization Rule 2: Column 7 (Index 6) is Indicator Area.
       const indicator = rawLine[6];
-      if (indicator === '*' || indicator === '/') {
-          // Comment Line - Ignore entire line
-          continue; 
-      }
-      // Note: We are treating 'D' (debug) as normal code or ignoring.
-      // We are currently NOT handling continuation '-' logic strictly merging lines,
-      // but we ARE skipping the indicator column itself.
+      if (indicator === '*' || indicator === '/') continue; 
 
-      // Normalization Rule 3: Process only Columns 8 thru 72 (Indices 7 to 71)
-      // This strictly enforces the 80-column card image rule where 73-80 are ignored.
       const maxCol = Math.min(rawLine.length, 72);
-      
-      // If line is too short to have Area A/B content, skip
       if (rawLine.length <= 7) continue;
 
       const lineContent = rawLine.substring(7, maxCol);
@@ -87,9 +149,6 @@ export class Lexer {
       let pos = 0;
       while (pos < lineContent.length) {
         const char = lineContent[pos];
-
-        // Calculate actual physical column number (1-based)
-        // pos 0 in lineContent corresponds to index 7 in rawLine, which is Column 8.
         const currentColumn = pos + 8; 
 
         if (/\s/.test(char)) {
@@ -97,137 +156,79 @@ export class Lexer {
           continue;
         }
 
-        // Handle Dot
-        if (char === '.') {
-          tokens.push({ type: TokenType.DOT, value: '.', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
+        // Punctuation
+        if (char === '.') { tokens.push({ type: TokenType.DOT, value: '.', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === '(') { tokens.push({ type: TokenType.LPAREN, value: '(', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === ')') { tokens.push({ type: TokenType.RPAREN, value: ')', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === ':') { tokens.push({ type: TokenType.COLON, value: ':', line: lineNum, column: currentColumn }); pos++; continue; }
+        
+        // Relational
+        if (char === '=') { tokens.push({ type: TokenType.EQUALS, value: '=', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === '>') { tokens.push({ type: TokenType.GREATER, value: '>', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === '<') { tokens.push({ type: TokenType.LESS, value: '<', line: lineNum, column: currentColumn }); pos++; continue; }
 
-        // Handle Parens
-        if (char === '(') {
-          tokens.push({ type: TokenType.LPAREN, value: '(', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-        if (char === ')') {
-          tokens.push({ type: TokenType.RPAREN, value: ')', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-
-        // Handle Relational Operators
-        if (char === '=') {
-          tokens.push({ type: TokenType.EQUALS, value: '=', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-        if (char === '>') {
-          tokens.push({ type: TokenType.GREATER, value: '>', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-        if (char === '<') {
-          tokens.push({ type: TokenType.LESS, value: '<', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-
-        // Handle Arithmetic Operators
-        if (char === '+') {
-          tokens.push({ type: TokenType.PLUS, value: '+', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
-        if (char === '-') {
-           // We check for Signed Numbers in the "Words" logic below.
-           // However, if we are here, it means it wasn't captured as a signed number start.
-           // E.g. "A - B", the space before - prevents it from being a signed number of previous token?
-           // Actually, the "Words" logic below starts at 'char'.
-           // If 'char' is '-', we check 'nextIsDigit'. If true, it's a number.
-           // If false, it falls through to here. So this is safe for operator.
-           tokens.push({ type: TokenType.MINUS, value: '-', line: lineNum, column: currentColumn });
-           pos++;
-           continue;
-        }
+        // Arithmetic
+        if (char === '+') { tokens.push({ type: TokenType.PLUS, value: '+', line: lineNum, column: currentColumn }); pos++; continue; }
+        if (char === '-') { tokens.push({ type: TokenType.MINUS, value: '-', line: lineNum, column: currentColumn }); pos++; continue; }
         if (char === '*') {
           if (pos + 1 < lineContent.length && lineContent[pos+1] === '*') {
-            tokens.push({ type: TokenType.POWER, value: '**', line: lineNum, column: currentColumn });
-            pos += 2;
+            tokens.push({ type: TokenType.POWER, value: '**', line: lineNum, column: currentColumn }); pos += 2;
           } else {
-            tokens.push({ type: TokenType.ASTERISK, value: '*', line: lineNum, column: currentColumn });
-            pos++;
+            tokens.push({ type: TokenType.ASTERISK, value: '*', line: lineNum, column: currentColumn }); pos++;
           }
           continue;
         }
-        if (char === '/') {
-          tokens.push({ type: TokenType.SLASH, value: '/', line: lineNum, column: currentColumn });
-          pos++;
-          continue;
-        }
+        if (char === '/') { tokens.push({ type: TokenType.SLASH, value: '/', line: lineNum, column: currentColumn }); pos++; continue; }
 
-        // Handle String Literals
+        // String Literals
         if (char === '"' || char === "'") {
           const quote = char;
-          let value = '';
-          pos++; // skip quote
-          
+          let value = quote;
+          pos++; 
           while (pos < lineContent.length && lineContent[pos] !== quote) {
             value += lineContent[pos];
             pos++;
           }
-          
-          if (pos < lineContent.length) {
-             pos++; // skip closing quote
-          } else {
-             throw new Error(`IGYPS2002-S String literal not closed at Line ${lineNum}, Column ${currentColumn}`);
-          }
-          
+          if (pos < lineContent.length) { value += lineContent[pos]; pos++; } 
+          else { throw new Error(`IGYPS2002-S String literal not closed at Line ${lineNum}, Column ${currentColumn}`); }
           tokens.push({ type: TokenType.LITERAL_STRING, value, line: lineNum, column: currentColumn });
           continue;
         }
 
-        // Handle Words (Identifiers, Keywords, Numbers)
+        // Words
         const isSign = (char === '+' || char === '-');
         const nextIsDigit = (pos + 1 < lineContent.length && this.isDigit(lineContent[pos+1]));
 
         if (this.isAlphaNumeric(char) || (isSign && nextIsDigit)) {
           let value = char;
           pos++;
-
           while (pos < lineContent.length) {
              const c = lineContent[pos];
-             // Allow dots only if followed by digit (decimal point)
              const isDecimalDot = (c === '.' && pos + 1 < lineContent.length && this.isDigit(lineContent[pos+1]));
-             
-             if (this.isAlphaNumeric(c) || isDecimalDot) {
-                value += c;
-                pos++;
-             } else {
-                break;
-             }
+             if (this.isAlphaNumeric(c) || isDecimalDot) { value += c; pos++; } else { break; }
           }
           
           const upperValue = value.toUpperCase();
-          
-          // Check for Number (Integer or Decimal, Signed or Unsigned)
           const isNumber = /^[\+\-]?[0-9]+(\.[0-9]+)?$/.test(upperValue);
 
           if (isNumber) {
              tokens.push({ type: TokenType.LITERAL_NUMBER, value: upperValue, line: lineNum, column: currentColumn });
           } else if (KEYWORDS[upperValue] !== undefined) {
-             tokens.push({ type: KEYWORDS[upperValue], value: upperValue, line: lineNum, column: currentColumn });
+             // Context check for MAP
+             if (upperValue === 'MAP') {
+                tokens.push({ type: TokenType.MAP, value: upperValue, line: lineNum, column: currentColumn });
+             } else {
+                tokens.push({ type: KEYWORDS[upperValue], value: upperValue, line: lineNum, column: currentColumn });
+             }
           } else {
              tokens.push({ type: TokenType.IDENTIFIER, value: upperValue, line: lineNum, column: currentColumn });
           }
           continue;
         }
 
-        // Unknown character
         throw new Error(`IGYPS2002-S Illegal character '${char}' at Line ${lineNum}, Column ${currentColumn}`);
       }
     }
-
     tokens.push({ type: TokenType.EOF, value: 'EOF', line: lines.length + 1, column: 0 });
     return tokens;
   }

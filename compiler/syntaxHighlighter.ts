@@ -1,118 +1,105 @@
 
-import { ASTNode, TokenContext } from './types';
-
-// Simplified categories mapping for the UI
-export type TokenType = 
-  | 'keyword' 
-  | 'identifier' 
-  | 'literal_string' 
-  | 'literal_number' 
-  | 'comment' 
-  | 'operator' 
-  | 'sequence' 
-  | 'indicator'
-  | 'error'
-  | 'default';
-
-export interface HighlightToken {
-  text: string;
-  type: TokenType;
-  startColumn: number;
-}
-
-const KEYWORDS = new Set([
-  'IDENTIFICATION', 'DIVISION', 'PROGRAM-ID', 'ENVIRONMENT', 'DATA', 'WORKING-STORAGE', 
-  'SECTION', 'PROCEDURE', 'PIC', 'VALUE', 'MOVE', 'ADD', 'SUBTRACT', 'COMPUTE', 'TO', 
-  'FROM', 'IF', 'THEN', 'ELSE', 'END-IF', 'PERFORM', 'UNTIL', 'TIMES', 'END-PERFORM', 
-  'ACCEPT', 'DISPLAY', 'STOP', 'RUN', 'ZERO', 'ZEROS', 'ZEROES', 'SPACE', 'SPACES',
-  'GIVING', 'BY', 'IS', 'OF', 'REPLACING', 'COPY'
-]);
-
-const OPERATORS = new Set(['=', '>', '<', '>=', '<=', '+', '-', '*', '/', '**']);
+import { TokenType, Token } from './types';
 
 export class SyntaxHighlighter {
 
-  public static highlightLine(line: string, lineNumber: number, ast?: ASTNode): HighlightToken[] {
-    const tokens: HighlightToken[] = [];
-    
-    // 1. Sequence Area (Cols 1-6)
-    if (line.length > 0) {
-      const seq = line.substring(0, Math.min(6, line.length));
-      tokens.push({ text: seq, type: 'sequence', startColumn: 1 });
-    }
-    
-    // 2. Indicator Area (Col 7)
-    let isComment = false;
-    if (line.length > 6) {
-      const ind = line[6];
-      if (ind === '*' || ind === '/') isComment = true;
-      tokens.push({ text: ind, type: isComment ? 'comment' : 'indicator', startColumn: 7 });
-    }
+  /**
+   * Returns the CSS class for a given TokenType.
+   */
+  public static getTokenClass(type: TokenType): string {
+    switch (type) {
+      // Structure & Headers (Blue/Bold)
+      case TokenType.IDENTIFICATION:
+      case TokenType.DIVISION:
+      case TokenType.PROGRAM_ID:
+      case TokenType.ENVIRONMENT:
+      case TokenType.DATA:
+      case TokenType.WORKING_STORAGE:
+      case TokenType.SECTION:
+      case TokenType.PROCEDURE:
+        return 'text-blue-400 font-bold';
 
-    // 3. Content Area (Cols 8-72)
-    if (line.length > 7) {
-      const content = line.substring(7, Math.min(line.length, 72));
+      // Verbs (Cyan/Bold)
+      case TokenType.MOVE:
+      case TokenType.ADD:
+      case TokenType.SUBTRACT:
+      case TokenType.MULTIPLY:
+      case TokenType.DIVIDE:
+      case TokenType.COMPUTE:
+      case TokenType.IF:
+      case TokenType.THEN:
+      case TokenType.ELSE:
+      case TokenType.END_IF:
+      case TokenType.PERFORM:
+      case TokenType.UNTIL:
+      case TokenType.TIMES:
+      case TokenType.END_PERFORM:
+      case TokenType.ACCEPT:
+      case TokenType.DISPLAY:
+      case TokenType.STOP:
+      case TokenType.RUN:
+        return 'text-cyan-300 font-bold';
+
+      // Keywords / Connectors (White/Dim)
+      case TokenType.TO:
+      case TokenType.FROM:
+      case TokenType.BY:
+      case TokenType.INTO:
+      case TokenType.GIVING:
+      case TokenType.VALUE:
+      case TokenType.PIC:
+        return 'text-purple-300';
+
+      // Constants (Yellow/Dim)
+      case TokenType.ZERO:
+      case TokenType.SPACE:
+        return 'text-yellow-500 italic';
+
+      // Literals
+      case TokenType.LITERAL_STRING:
+        return 'text-green-400';
+      case TokenType.LITERAL_NUMBER:
+        return 'text-yellow-300';
+
+      // Operators
+      case TokenType.EQUALS:
+      case TokenType.GREATER:
+      case TokenType.LESS:
+      case TokenType.PLUS:
+      case TokenType.MINUS:
+      case TokenType.ASTERISK:
+      case TokenType.SLASH:
+      case TokenType.POWER:
+        return 'text-white font-bold';
+
+      // Identifiers
+      case TokenType.IDENTIFIER:
+        return 'text-gray-100';
+
+      // Punctuation
+      case TokenType.DOT:
+        return 'text-white font-bold';
       
-      if (isComment) {
-        tokens.push({ text: content, type: 'comment', startColumn: 8 });
-      } else {
-        const contentTokens = this.tokenizeContent(content, 8);
-        tokens.push(...contentTokens);
-      }
+      default:
+        return 'text-gray-400';
     }
-
-    // 4. Overflow (Cols 73+)
-    if (line.length > 72) {
-      const overflow = line.substring(72);
-      tokens.push({ text: overflow, type: 'error', startColumn: 73 });
-    }
-
-    return tokens;
   }
 
-  private static tokenizeContent(content: string, offset: number): HighlightToken[] {
-    const tokens: HighlightToken[] = [];
-    // Regex matches: 
-    // 1. Strings ("..." or '...')
-    // 2. Words (Alphanumeric + hyphens)
-    // 3. Numbers (Digits + optional dot)
-    // 4. Operators
-    // 5. Whitespace/Symbols
-    const regex = /("[^"]*"|'[^']*')|([\w-]+)|(\d+(?:\.\d+)?)|(>=|<=|\*\*|[=><+\-*/])|([^\s\w"']+)|\s+/g;
+  /**
+   * Groups tokens by line number for easier rendering.
+   */
+  public static groupTokensByLine(tokens: Token[], totalLines: number): Token[][] {
+    const lines: Token[][] = Array.from({ length: totalLines + 1 }, () => []);
     
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const text = match[0];
-      const startIndex = match.index;
-      const absColumn = offset + startIndex;
-
-      let type: TokenType = 'default';
-
-      if (match[1]) { 
-        type = 'literal_string';
-      } else if (match[2]) { 
-        // Word classification
-        const upper = match[2].toUpperCase();
-        if (/^\d+$/.test(upper)) {
-           // Level number or integer
-           type = 'literal_number'; // We group levels as numbers for color simplicity or special handle? Prompt asked for Yellow for numbers.
-        } else if (KEYWORDS.has(upper)) {
-           type = 'keyword';
-        } else {
-           type = 'identifier';
-        }
-      } else if (match[3]) { 
-        type = 'literal_number';
-      } else if (match[4]) {
-        type = 'operator';
-      } else {
-        // Symbols or Whitespace
-        type = 'default';
+    for (const token of tokens) {
+      if (token.line <= totalLines) {
+        lines[token.line].push(token);
       }
-
-      tokens.push({ text, type, startColumn: absColumn });
     }
-
-    return tokens;
+    
+    // Sort tokens in each line by column to ensure correct rendering order
+    lines.forEach(line => line.sort((a, b) => a.column - b.column));
+    
+    return lines;
   }
 }
