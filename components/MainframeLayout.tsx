@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Terminal } from 'lucide-react';
 
@@ -19,11 +20,13 @@ export const MainframeLayout: React.FC<MainframeLayoutProps> = ({ children, onRu
         {/* Header / Status Bar */}
         <div className="bg-blue-900 text-white p-2 flex justify-between items-center border-b border-gray-600 shrink-0">
             <div className="flex items-center gap-2">
-                <Terminal size={18} />
-                <span className="font-bold tracking-widest">ISPF PRIMARY OPTION MENU</span>
+                {/* Branding Icon */}
+                <span className="text-xl">🦆</span>
+                <span className="font-bold tracking-widest text-yellow-300">DUCK MAINFRAME SIMULATOR</span>
+                <span className="text-xs bg-blue-800 px-2 py-0.5 rounded text-gray-300 border border-blue-700">v0.1</span>
             </div>
             <div className="text-cyan-300 hidden sm:block">
-                USER=TIAGO &nbsp; TERM=3278-2 &nbsp; {new Date().toLocaleTimeString()}
+                USER=STUDENT &nbsp; TERM=3278-2 &nbsp; {new Date().toLocaleTimeString()}
             </div>
         </div>
 
@@ -33,7 +36,7 @@ export const MainframeLayout: React.FC<MainframeLayoutProps> = ({ children, onRu
         </div>
 
         {/* Footer Keys - ISPF Style */}
-        <div className="bg-black text-cyan-400 p-2 border-t border-gray-700 flex flex-wrap gap-x-6 gap-y-1 text-sm select-none font-bold tracking-wide shrink-0 font-[VT323] text-lg">
+        <div className="bg-black text-cyan-400 p-2 border-t border-gray-700 flex flex-wrap gap-x-6 gap-y-1 text-sm select-none font-bold tracking-wide shrink-0 font-[VT323] text-lg items-center">
             <div 
                 onClick={onRun} 
                 className="cursor-pointer hover:bg-cyan-900 hover:text-white px-1 rounded transition-colors"
@@ -67,6 +70,11 @@ export const MainframeLayout: React.FC<MainframeLayoutProps> = ({ children, onRu
             
             <div className="ml-auto text-yellow-400 animate-pulse px-1">
                 {statusMessage}
+            </div>
+            
+            {/* Minimal Footer Branding */}
+            <div className="w-full text-center text-xs text-gray-600 mt-1 font-sans border-t border-gray-900 pt-1">
+                DUCK Mainframe Simulator • Educational Purpose Only
             </div>
         </div>
       </div>

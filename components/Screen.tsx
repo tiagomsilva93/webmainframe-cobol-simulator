@@ -6,9 +6,10 @@ interface ScreenProps {
     buffer: ScreenChar[];
     onInput: (buffer: ScreenChar[]) => void;
     active: boolean;
+    cursorPosition?: number;
 }
 
-export const Screen: React.FC<ScreenProps> = ({ buffer, onInput, active }) => {
+export const Screen: React.FC<ScreenProps> = ({ buffer, onInput, active, cursorPosition }) => {
     const [localBuffer, setLocalBuffer] = useState<ScreenChar[]>(buffer);
     const [cursor, setCursor] = useState(0);
 
@@ -22,6 +23,13 @@ export const Screen: React.FC<ScreenProps> = ({ buffer, onInput, active }) => {
             // Simple: Start at 0
         }
     }, [active]);
+    
+    // Force cursor position when prop changes (e.g. Panel Reset)
+    useEffect(() => {
+        if (cursorPosition !== undefined) {
+            setCursor(cursorPosition);
+        }
+    }, [cursorPosition]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (!active) return;

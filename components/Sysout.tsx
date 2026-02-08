@@ -35,18 +35,18 @@ export const Sysout: React.FC<SysoutProps> = ({ logs, diagnostics }) => {
 
   return (
     <div className="flex-1 h-full flex flex-col bg-[#101010]">
-      <div className="bg-neutral-800 text-white px-2 py-1 text-xs border-b border-gray-700 font-bold flex justify-between shrink-0">
-        <span>SDSF OUTPUT DISPLAY - JOB00152</span>
+      <div className="bg-neutral-800 text-yellow-300 px-2 py-1 text-xs border-b border-gray-700 font-bold flex justify-between shrink-0">
+        <span>🦆 DUCK EXECUTION VIEWER - JOB00152</span>
         <span>LINE 0 TO {logs.length + sortedDiagnostics.length} OF {logs.length + sortedDiagnostics.length}</span>
       </div>
       
       <div className="flex-1 p-4 font-mono overflow-scroll" style={{ fontFamily: "'VT323', monospace", fontSize: '1.2rem' }}>
         <div className="mb-4 text-white opacity-50 whitespace-pre-line text-cyan-400">
-            JES2 JOB LOG -- SYSTEM CICS1 -- NODE LOCAL <br/>
+            DUCK MAINFRAME SIMULATOR v0.1 -- SYSTEM DUCK1 -- NODE BROWSER <br/>
             -------------------------------------------------<br/>
-            IRR010I  USERID ADMIN   IS ASSIGNED TO THIS JOB.<br/>
-            ICH70001I ADMIN    LAST ACCESS AT {new Date().toLocaleTimeString()} ON MVS<br/>
-            $HASP373 JOB00152 STARTED - WLM INIT - CLASS A - SYS CICS1<br/>
+            IRR010I  USERID STUDENT IS ASSIGNED TO THIS JOB.<br/>
+            ICH70001I STUDENT  LAST ACCESS AT {new Date().toLocaleTimeString()} ON DUCK-OS<br/>
+            $HASP373 JOB00152 STARTED - WLM INIT - CLASS A - SYS DUCK1<br/>
             -------------------------------------------------<br/>
         </div>
 
