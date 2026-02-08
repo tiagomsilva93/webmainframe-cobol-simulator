@@ -227,41 +227,19 @@ export class IspfRuntime {
 
     private executeProc(panel: IspfPanel) {
         // Very basic script interpreter
-        // Supports: &ZSEL = TRANS( TRUNC(&ZCMD,'.') ... )
-        // Supports: IF (...)
-        
-        // We will do a hardcoded logic for specific standard variables to simulate menus
-        // A real parser is complex.
-        
         const zcmd = this.variables['ZCMD'] || '';
-        
-        // Pre-process common PROC commands
-        for (const line of panel.procScript) {
-            // VER( ... ) validation mock
-            if (line.includes('VER(') && line.includes('NONBLANK')) {
-                 // Check variable... ignored for sim
-            }
-        }
         
         // Handle Navigation (Simulated ZSEL)
         if (zcmd !== '') {
             // Check if user entered jump command (=X, =1)
             if (zcmd.startsWith('=')) {
                 const jump = zcmd.substring(1);
-                // Basic Jump: Only support =X (Exit) or =1 (View)
+                // Basic Jump: Only support =X (Exit)
                 if (jump === 'X') {
-                    this.panelStack = []; // Exit
-                    // In real ISPF, =X goes to exit. Here we go to empty or root.
+                    this.panelStack = []; 
                 }
             }
         }
-        
-        // Reset ZCMD after processing (standard ISPF behavior)
-        // Note: The UI layer (App.tsx) handles the actual ZSEL switching based on returned state, 
-        // or we handle it here by manipulating panelStack.
-        
-        // We need to expose the "Next Action" to App.tsx? 
-        // Or App.tsx polls the runtime.
     }
 
     public evalZSEL(): string | null {
@@ -271,10 +249,9 @@ export class IspfRuntime {
         if (!cmd) return null;
 
         // Mock Logic based on Standard Panel
-        if (cmd === '0') return 'PANEL(ISPOPT)';
-        if (cmd === '1') return 'PGM(VIEW)'; // View / Browse
-        if (cmd === '2') return 'PGM(EDIT)';
-        if (cmd === '3') return 'PGM(UTIL)';
+        if (cmd === '1') return 'PGM(STUDIO)'; 
+        if (cmd === '2') return 'PGM(TOOLS)'; 
+        if (cmd === '3') return 'PGM(UTILS)';
         if (cmd === 'X') return 'EXIT';
         
         return null;
@@ -291,6 +268,7 @@ export class IspfRuntime {
         if (!panel) {
             this.clearScreen();
             this.writeString(10, 25, "ISPF TERMINATED. PRESS F3.");
+            this.cursor = { row: 0, col: 0 };
             return;
         }
 
@@ -322,6 +300,19 @@ export class IspfRuntime {
                 };
             }
         });
+
+        // Calculate Cursor Position
+        // Priority: Field named 'ZCMD', otherwise first INPUT field.
+        const zcmdField = panel.fields.find(f => f.variable === 'ZCMD');
+        const firstInput = panel.fields.find(f => f.attribute.type === 'INPUT');
+        const target = zcmdField || firstInput;
+        
+        if (target) {
+            // +1 because the field starts at 'col' (attribute byte), input is next char
+            this.cursor = { row: target.row, col: target.col + 1 };
+        } else {
+            this.cursor = { row: 0, col: 0 };
+        }
         
         // Footer Message
         if (this.message) {
