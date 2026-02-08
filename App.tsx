@@ -1,10 +1,8 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { MainframeLayout } from './components/MainframeLayout';
-import { Editor } from './components/Editor';
-import { Sysout } from './components/Sysout';
 import { Screen } from './components/Screen';
-import { IspfEditor } from './components/IspfEditor';
+import { CobolStudioView } from './components/CobolStudioView';
 import { InputModal } from './components/InputModal';
 import { Lexer } from './compiler/lexer';
 import { Parser } from './compiler/parser';
@@ -15,7 +13,6 @@ import { Preprocessor } from './compiler/preprocessor';
 import { SAMPLE_CODE, PANEL_ISR_PRIM, PANEL_ISPOPT } from './constants';
 import { Token, Diagnostic, ProgramNode } from './compiler/types';
 
-// ... (InputRequest interface kept)
 interface InputRequest {
   variableName: string;
   picType: 'X' | '9';
@@ -24,7 +21,7 @@ interface InputRequest {
 
 const App: React.FC = () => {
   // Global State
-  const [currentView, setCurrentView] = useState<'ISPF' | 'ISPF_EDIT' | 'COBOL_RUN' | 'SYSOUT'>('ISPF');
+  const [currentView, setCurrentView] = useState<'ISPF' | 'COBOL_STUDIO' | 'COBOL_RUN'>('ISPF');
   const [status, setStatus] = useState("ISPF ACTIVE");
   
   // Data State
@@ -35,6 +32,7 @@ const App: React.FC = () => {
   // ISPF Runtime
   const ispfRef = useRef<IspfRuntime>(new IspfRuntime());
   const [ispfBuffer, setIspfBuffer] = useState<ScreenChar[]>([]);
+  const [ispfCursor, setIspfCursor] = useState<number>(0);
 
   // COBOL Runtime
   const [isInputOpen, setIsInputOpen] = useState(false);
@@ -50,60 +48,86 @@ const App: React.FC = () => {
       const ispf = ispfRef.current;
       ispf.registerPanel(PANEL_ISR_PRIM);
       ispf.registerPanel(PANEL_ISPOPT);
-      ispf.start('UNKNOWN'); // Registering names manually above, but start needs name
-      // Hack: Register manually extracts name from )PANEL? No, our parser is simple.
-      // We will re-register with explicit names.
-      // Re-init with correct map keys:
-      // The parsePanel does not return name if not in )PANEL header.
-      // We will force set.
+      ispf.start('UNKNOWN');
       ispf['panelRepo'].set('ISR@PRIM', ispf['parsePanel'](PANEL_ISR_PRIM));
       ispf['panelRepo'].set('ISPOPT', ispf['parsePanel'](PANEL_ISPOPT));
       
       ispf.start('ISR@PRIM');
       setIspfBuffer([...ispf.screenBuffer]);
+      setIspfCursor(ispf.cursor.row * 80 + ispf.cursor.col);
   }, []);
+
+  // Real-time Validation Effect
+  useEffect(() => {
+      const timer = setTimeout(() => {
+          // Mock Preprocessor
+          const prep = Preprocessor.process(datasetContent, new Map());
+          // Run Validation
+          const errors = Validator.validate(prep.expandedSource);
+          
+          // Map to Diagnostics format
+          const diags: Diagnostic[] = errors.map(e => ({
+              line: e.line,
+              column: e.column,
+              code: e.code,
+              message: e.message,
+              severity: e.severity
+          }));
+          
+          setDiagnostics(diags);
+          
+          if (currentView === 'COBOL_STUDIO') {
+             if (diags.some(d => d.severity === 'ERROR')) setStatus("COBOL STUDIO - SYNTAX ERROR");
+             else setStatus("COBOL STUDIO - READY");
+          }
+
+      }, 800); // 800ms debounce
+
+      return () => clearTimeout(timer);
+  }, [datasetContent, currentView]);
 
   // --- Handlers ---
 
   const handleIspfInput = (buffer: ScreenChar[]) => {
-      // 1. Update ISPF Runtime
       ispfRef.current.handleInput(buffer);
-      
-      // 2. Check ZSEL/ZCMD for Navigation
       const nav = ispfRef.current.evalZSEL();
       ispfRef.current.clearZCMD();
       
-      if (nav === 'PGM(EDIT)') {
-          setCurrentView('ISPF_EDIT');
-          setStatus("ISPF EDITOR");
+      if (nav === 'PGM(STUDIO)') {
+          setCurrentView('COBOL_STUDIO');
+          setStatus("DUCK COBOL STUDIO");
+          setLogs(["READY FOR EXECUTION."]);
       } 
-      else if (nav === 'PGM(VIEW)' || nav === 'PGM(UTIL)') {
-          // For Sim: View = Run/Compile
-          runCompilationProcess();
+      else if (nav === 'PGM(UTILS)' || nav === 'PGM(TOOLS)') {
+           ispfRef.current.message = "FEATURE COMING SOON";
+           setIspfBuffer([...ispfRef.current.screenBuffer]);
       }
       else if (nav === 'EXIT') {
-          // Reset to PRIM
           ispfRef.current.start('ISR@PRIM');
           setIspfBuffer([...ispfRef.current.screenBuffer]);
       }
       else {
-          // Just rerender ISPF
           setIspfBuffer([...ispfRef.current.screenBuffer]);
       }
+      
+      const c = ispfRef.current.cursor;
+      setIspfCursor(c.row * 80 + c.col);
   };
 
-  const handleEditorSave = (newContent: string) => {
+  const handleEditorChange = (newContent: string) => {
       setDatasetContent(newContent);
   };
 
-  const handleEditorExit = () => {
+  const handleStudioExit = () => {
       setCurrentView('ISPF');
       setStatus("ISPF PRIMARY OPTION MENU");
       ispfRef.current.start('ISR@PRIM');
       setIspfBuffer([...ispfRef.current.screenBuffer]);
+      const c = ispfRef.current.cursor;
+      setIspfCursor(c.row * 80 + c.col);
   };
 
-  // --- COBOL Compilation & Run (reused from previous step) ---
+  // --- COBOL Compilation & Run ---
 
   const handleRuntimeInput = useCallback((variableName: string, picType: 'X'|'9', length: number): Promise<string> => {
     return new Promise((resolve) => {
@@ -146,11 +170,23 @@ const App: React.FC = () => {
 
   const runCompilationProcess = async () => {
     setStatus("COMPILING...");
-    setCurrentView('SYSOUT');
-    setLogs([]);
+    setLogs(["COMPILING..."]);
     
-    // ... Compile Logic ...
+    // Check validation first
     const prep = Preprocessor.process(datasetContent, new Map());
+    const validationErrors = Validator.validate(prep.expandedSource);
+    
+    // Update diagnostics immediately
+    setDiagnostics(validationErrors.map(e => ({
+        line: e.line, column: e.column, code: e.code, message: e.message, severity: e.severity
+    })));
+
+    if (validationErrors.some(e => e.severity === 'ERROR')) {
+        setLogs(["COMPILATION FAILED. CHECK DIAGNOSTICS."]);
+        setStatus("COMPILATION FAILED");
+        return;
+    }
+
     const tokens = new Lexer(prep.expandedSource).tokenize();
     let ast: ProgramNode | undefined;
     try {
@@ -159,41 +195,53 @@ const App: React.FC = () => {
         setLogs([`PARSER ERROR: ${e.message}`]);
         return;
     }
-    
-    const errs = Validator.validate(prep.expandedSource);
-    setDiagnostics(errs);
-    
-    if (errs.some(e => e.severity === 'ERROR')) {
-        setStatus("COMPILATION FAILED");
-        return;
-    }
 
     setStatus("EXECUTING...");
-    setCurrentView('COBOL_RUN'); // If Batch (Text output) -> SYSOUT? If CICS -> COBOL_RUN
+    // If it's a CICS/Interactive program, switch to COBOL_RUN. 
+    // Otherwise keep showing logs in Studio View.
+    // Heuristic: Check if tokens include CICS or DISPLAY (Text)
+    // For now: Always stay in Studio UNLESS we detect CICS commands or explicit screen usage?
+    // Let's assume CICS needs full screen. Batch/Display stays in logs.
     
-    // Heuristic: If SEND MAP found in tokens, force CICS screen view
-    // For now always use COBOL_RUN which renders Screen OR Logs depending on mode?
-    // We'll overlay Sysout if output is text-only later.
+    const isCICS = tokens.some(t => t.value === 'CICS' || t.value === 'MAP');
     
     const runtime = new Runtime(handleRuntimeInput, handleScreenUpdate, handleScreenInputRequest);
     cobolRuntimeRef.current = runtime;
-    
+
+    if (isCICS) {
+         setCurrentView('COBOL_RUN');
+    }
+
     setTimeout(async () => {
         const res = await runtime.run(ast!);
-        setLogs(res.output);
-        if (res.errors.length > 0) setStatus("JOB FAILED");
-        else setStatus("JOB ENDED");
         
-        // If it was batch (no CICS screen usage), show Sysout
-        // We check if screenBuffer is empty or dirty? 
-        // For Sim: Show Sysout always at end.
-        setCurrentView('SYSOUT');
+        // Append execution logs to existing logs
+        const newLogs = ["--- EXECUTION STARTED ---", ...res.output, "--- EXECUTION ENDED ---"];
+        if (res.errors.length > 0) {
+            newLogs.push("ERRORS:");
+            newLogs.push(...res.errors);
+            setStatus("JOB FAILED");
+        } else {
+            setStatus("JOB ENDED RC=0000");
+        }
+        
+        setLogs(newLogs);
+        
+        if (isCICS) {
+            // Return to Studio after CICS ends?
+            // Or let user exit.
+            // For now, auto return to studio after 2s if needed, or provide button.
+            // Let's stay in CICS screen until user exits via F3 (handled in Screen component? No logic yet).
+            // We will force return to studio for now after short delay if no error?
+            // Better: Add exit button in COBOL_RUN view.
+             setCurrentView('COBOL_STUDIO');
+        }
     }, 100);
   };
 
   return (
     <MainframeLayout 
-        onRun={() => {}} 
+        onRun={currentView === 'COBOL_STUDIO' ? runCompilationProcess : () => {}} 
         onReset={() => {}} 
         onLoad={() => {}} 
         statusMessage={status}
@@ -211,37 +259,36 @@ const App: React.FC = () => {
                 buffer={ispfBuffer} 
                 onInput={handleIspfInput} 
                 active={true}
+                cursorPosition={ispfCursor}
             />
         )}
 
-        {currentView === 'ISPF_EDIT' && (
-            <div className="w-full h-full">
-                <IspfEditor 
-                    initialContent={datasetContent}
-                    onSave={handleEditorSave}
-                    onExit={handleEditorExit}
-                    datasetName="'USER.COBOL(SOURCE)'"
-                />
-            </div>
-        )}
-
-        {currentView === 'COBOL_RUN' && (
-             <Screen 
-                buffer={cicsBuffer} 
-                onInput={handleCicsInputSubmit} 
-                active={isWaitingForScreen}
+        {currentView === 'COBOL_STUDIO' && (
+             <CobolStudioView 
+                content={datasetContent}
+                onChange={handleEditorChange}
+                logs={logs}
+                diagnostics={diagnostics}
+                onRun={runCompilationProcess}
+                onExit={handleStudioExit}
              />
         )}
 
-        {currentView === 'SYSOUT' && (
-            <div className="flex flex-col w-full h-full relative">
-                 <div className="absolute top-0 right-0 p-2 z-50">
-                     <button onClick={handleEditorExit} className="bg-red-600 text-white px-4 font-bold border border-white">EXIT TO ISPF</button>
-                 </div>
-                 <Sysout logs={logs} diagnostics={diagnostics} />
-            </div>
+        {currentView === 'COBOL_RUN' && (
+             <div className="relative w-full h-full">
+                 <Screen 
+                    buffer={cicsBuffer} 
+                    onInput={handleCicsInputSubmit} 
+                    active={isWaitingForScreen}
+                 />
+                 <button 
+                    className="absolute top-2 right-2 bg-red-600 text-white px-2 py-1 border border-white z-50 text-xs font-bold"
+                    onClick={() => setCurrentView('COBOL_STUDIO')}
+                 >
+                    EXIT CICS
+                 </button>
+             </div>
         )}
-
     </MainframeLayout>
   );
 };
